@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchAnimeInfo, AnimeDetail as AnimeDetailType, getAnimeName } from "@/lib/api";
+import { addToWatchlist, removeFromWatchlist, isInWatchlist, getLastWatched } from "@/lib/storage";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { Play, Star, Calendar, Clock, Tv, ExternalLink } from "lucide-react";
+import { Play, Star, Calendar, Clock, Tv, Bookmark, BookmarkCheck, Share2 } from "lucide-react";
+import { toast } from "sonner";
 
 export default function AnimeDetailPage() {
   const { name } = useParams();
@@ -11,15 +13,46 @@ export default function AnimeDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeSeason, setActiveSeason] = useState(0);
   const [showAllChars, setShowAllChars] = useState(false);
+  const [inWatchlist, setInWatchlist] = useState(false);
+  const [showFullDesc, setShowFullDesc] = useState(false);
+
+  const decodedName = name ? decodeURIComponent(name) : "";
 
   useEffect(() => {
-    if (!name) return;
+    if (!decodedName) return;
     setLoading(true);
-    fetchAnimeInfo(decodeURIComponent(name))
+    setInWatchlist(isInWatchlist(decodedName));
+    fetchAnimeInfo(decodedName)
       .then(setData)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [name]);
+  }, [decodedName]);
+
+  const toggleWatchlist = () => {
+    if (!data) return;
+    const title = getAnimeName({ anime_name: data.anime_name, meta: data.meta });
+    if (inWatchlist) {
+      removeFromWatchlist(data.anime_name);
+      setInWatchlist(false);
+      toast.info("Removed from watchlist");
+    } else {
+      addToWatchlist({
+        animeName: data.anime_name,
+        title,
+        cover: data.meta?.image?.cover,
+        genres: data.meta?.genres,
+        score: data.meta?.averageScore,
+        addedAt: Date.now(),
+      });
+      setInWatchlist(true);
+      toast.success("Added to watchlist!");
+    }
+  };
+
+  const handleShare = () => {
+    navigator.clipboard.writeText(window.location.href);
+    toast.success("Link copied!");
+  };
 
   if (loading) return (
     <div className="min-h-screen">
@@ -47,6 +80,7 @@ export default function AnimeDetailPage() {
   const currentEps = seasons[activeSeason]?.episodes || [];
   const characters = meta?.characters || [];
   const displayChars = showAllChars ? characters : characters.slice(0, 12);
+  const lastWatched = getLastWatched(data.anime_name);
 
   return (
     <div className="min-h-screen">
@@ -60,7 +94,7 @@ export default function AnimeDetailPage() {
       </div>
 
       {/* Info section */}
-      <div className="container relative -mt-48 z-10">
+      <div className="container relative -mt-48 z-10 pb-8">
         <div className="flex flex-col sm:flex-row gap-6">
           {cover && (
             <div className="flex-shrink-0">
@@ -96,14 +130,40 @@ export default function AnimeDetailPage() {
               <p className="text-sm text-muted-foreground mb-3">Studio: <span className="text-foreground">{meta.studios.join(", ")}</span></p>
             )}
 
-            {desc && <p className="text-sm text-foreground/80 leading-relaxed mb-4 line-clamp-4">{desc}</p>}
+            {desc && (
+              <div className="mb-4">
+                <p className={`text-sm text-foreground/80 leading-relaxed ${showFullDesc ? "" : "line-clamp-4"}`}>{desc}</p>
+                {desc.length > 300 && (
+                  <button onClick={() => setShowFullDesc(!showFullDesc)} className="text-xs text-primary hover:underline mt-1">
+                    {showFullDesc ? "Show Less" : "Read More"}
+                  </button>
+                )}
+              </div>
+            )}
 
-            <Link
-              to={`/watch/${encodeURIComponent(data.anime_name)}/1`}
-              className="inline-flex items-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold px-6 py-3 rounded-lg transition-all hover:shadow-[0_0_20px_hsl(0_85%_55%_/_0.4)]"
-            >
-              <Play size={18} className="fill-current" /> Watch Episode 1
-            </Link>
+            <div className="flex items-center gap-3 flex-wrap">
+              <Link
+                to={lastWatched ? `/watch/${encodeURIComponent(data.anime_name)}/${lastWatched.episode}` : `/watch/${encodeURIComponent(data.anime_name)}/1`}
+                className="inline-flex items-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold px-6 py-3 rounded-lg transition-all hover:shadow-[0_0_20px_hsl(var(--primary)_/_0.4)]"
+              >
+                <Play size={18} className="fill-current" />
+                {lastWatched ? `Continue Ep ${lastWatched.episode}` : "Watch Episode 1"}
+              </Link>
+
+              <button
+                onClick={toggleWatchlist}
+                className={`inline-flex items-center gap-2 font-semibold px-5 py-3 rounded-lg border transition-all ${
+                  inWatchlist ? "bg-neon/10 border-neon text-neon" : "bg-secondary border-border hover:border-primary/50"
+                }`}
+              >
+                {inWatchlist ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+                {inWatchlist ? "In Watchlist" : "Add to Watchlist"}
+              </button>
+
+              <button onClick={handleShare} className="p-3 bg-secondary border border-border rounded-lg hover:border-primary/50 transition-colors">
+                <Share2 size={18} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -126,12 +186,16 @@ export default function AnimeDetailPage() {
               </div>
             )}
             <h2 className="font-display font-bold text-xl mb-3">Episodes</h2>
-            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
+            <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 gap-2">
               {currentEps.map(ep => (
                 <Link
                   key={ep.episode_no}
                   to={`/watch/${encodeURIComponent(data.anime_name)}/${ep.episode_no}`}
-                  className="flex items-center justify-center h-12 bg-secondary hover:bg-primary/20 hover:border-primary/50 border border-border rounded-lg text-sm font-medium transition-all"
+                  className={`flex items-center justify-center h-11 rounded-lg text-sm font-medium transition-all border ${
+                    lastWatched?.episode === ep.episode_no
+                      ? "bg-primary/20 border-primary text-primary"
+                      : "bg-secondary hover:bg-primary/10 hover:border-primary/50 border-border"
+                  }`}
                 >
                   {ep.episode_no}
                 </Link>
@@ -144,7 +208,7 @@ export default function AnimeDetailPage() {
         {meta?.trailer?.url && (
           <section className="mt-10">
             <h2 className="font-display font-bold text-xl mb-3">Trailer</h2>
-            <div className="aspect-video max-w-2xl rounded-lg overflow-hidden">
+            <div className="aspect-video max-w-2xl rounded-lg overflow-hidden neon-border">
               <iframe
                 src={meta.trailer.url.replace("watch?v=", "embed/")}
                 className="w-full h-full"
@@ -162,8 +226,8 @@ export default function AnimeDetailPage() {
             <h2 className="font-display font-bold text-xl mb-3">Characters</h2>
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
               {displayChars.map(c => (
-                <div key={c.name} className="text-center">
-                  {c.image && <img src={c.image} alt={c.name} className="w-full aspect-square object-cover rounded-lg mb-1.5" loading="lazy" />}
+                <div key={c.name} className="text-center group">
+                  {c.image && <img src={c.image} alt={c.name} className="w-full aspect-square object-cover rounded-lg mb-1.5 group-hover:ring-2 ring-primary/50 transition-all" loading="lazy" />}
                   <p className="text-xs font-medium truncate">{c.name}</p>
                   <p className="text-[10px] text-muted-foreground">{c.role}</p>
                 </div>
