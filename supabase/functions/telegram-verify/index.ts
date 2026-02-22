@@ -3,6 +3,24 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-secret',
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  TELEGRAM VERIFY — SUPABASE EDGE FUNCTION
+//
+//  All verification is handled by your Render bot API (Flask + MongoDB).
+//  This function is a pure proxy — no Supabase DB reads/writes for codes.
+//
+//  Required Supabase secrets:
+//    BOT_API_URL    = https://your-bot.onrender.com
+//    BOT_API_SECRET = same value as API_SECRET in your bot's config.py
+//
+//  Endpoints (all proxied to bot):
+//    GET|POST ?action=status   — global stats from bot MongoDB
+//    POST     ?action=verify   — verify code + register device (max 2)
+//    POST     ?action=check    — check code validity (no side effects)
+//    POST     ?action=revoke   — admin: revoke a code
+//    GET      ?action=channels — list active channels (from Supabase, admin-managed)
+// ═══════════════════════════════════════════════════════════════════════════
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 Deno.serve(async (req) => {
@@ -10,341 +28,191 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  const apiSecret = Deno.env.get('TELEGRAM_API_SECRET')!;
-  const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN')!;
+  const BOT_API_URL    = Deno.env.get('BOT_API_URL') || '';
+  const BOT_API_SECRET = Deno.env.get('BOT_API_SECRET') || '';
 
-  const supabase = createClient(supabaseUrl, serviceKey);
-  const url = new URL(req.url);
+  // Supabase client — only used for the `channels` action (admin-managed table)
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase    = createClient(supabaseUrl, serviceKey);
+
+  const url    = new URL(req.url);
   const action = url.searchParams.get('action');
 
-  // --- Auth: X-API-Secret header OR ?secret= OR JSON body 'secret' field ---
-  const headerSecret = req.headers.get('x-api-secret');
-  const querySecret = url.searchParams.get('secret');
-
-  // For actions that need bot auth (status, check, revoke, generate)
-  const botActions = ['status', 'check', 'revoke', 'generate'];
-  // Actions that are public (frontend facing)
-  const publicActions = ['channels', 'verify', 'claim'];
-
-  let authenticated = false;
   let bodyData: any = null;
 
-  if (publicActions.includes(action || '')) {
-    authenticated = true; // public endpoints
-  } else if (headerSecret === apiSecret || querySecret === apiSecret) {
-    authenticated = true;
-  } else if (req.method === 'POST') {
-    // Clone request to read body for secret check
-    try {
-      bodyData = await req.json();
-      if (bodyData?.secret === apiSecret) {
-        authenticated = true;
-      }
-    } catch {
-      // body parse failed
-    }
-  }
-
-  if (!authenticated) {
-    return new Response(JSON.stringify({
-      success: false,
-      error: 'unauthorized',
-      auth: 'X-API-Secret header OR ?secret= OR JSON body "secret" field',
-    }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
-
-  // Helper to get body (already parsed or parse now)
   const getBody = async () => {
     if (bodyData !== null) return bodyData;
-    try {
-      bodyData = await req.json();
-      return bodyData;
-    } catch {
-      return {};
+    try { bodyData = await req.json(); } catch { bodyData = {}; }
+    return bodyData;
+  };
+
+  const json = (data: unknown, status = 200) =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+
+  // Helper: call bot API
+  const callBot = async (botAction: string, body?: object) => {
+    if (!BOT_API_URL) throw new Error('BOT_API_URL not configured in Supabase secrets');
+
+    const res = await fetch(
+      `${BOT_API_URL}/telegram-verify?action=${botAction}`,
+      body
+        ? {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Secret': BOT_API_SECRET },
+            body:    JSON.stringify(body),
+          }
+        : {
+            method:  'GET',
+            headers: { 'X-API-Secret': BOT_API_SECRET },
+          }
+    );
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Bot API error ${res.status}: ${text}`);
     }
+
+    return res.json();
   };
 
   try {
-    // --- API info ---
+    // ── API info ────────────────────────────────────────────────────────────
     if (!action) {
-      return new Response(JSON.stringify({
+      return json({
         service: 'Telegram Verification Bot API',
-        auth: 'X-API-Secret header OR ?secret= OR JSON body "secret" field',
+        source:  'Render bot (Flask + MongoDB)',
         endpoints: {
-          'GET|POST /telegram-verify?action=status': 'Global stats',
-          'POST     /telegram-verify?action=check': 'Check code (no device registration)',
-          'POST     /telegram-verify?action=revoke': 'Admin: revoke a code',
-          'POST     /telegram-verify?action=verify': 'Verify code + register device',
-          'POST     /telegram-verify?action=generate': 'Generate code after channel check',
-          'GET      /telegram-verify?action=channels': 'List active channels (public)',
-          'POST     /telegram-verify?action=claim': 'Claim code after signup (auth required)',
+          'GET|POST ?action=status':   'Global stats from bot MongoDB',
+          'POST     ?action=verify':   'Verify code + register device (max 2)',
+          'POST     ?action=check':    'Check code (no device registration)',
+          'POST     ?action=revoke':   'Admin: revoke a code',
+          'GET      ?action=channels': 'List active channels (Supabase table)',
         },
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Action: bot checks active codes / user limit
+    // ── STATUS ──────────────────────────────────────────────────────────────
+    // Proxied to bot — returns active codes, device counts, etc. from MongoDB
     if (action === 'status') {
-      const { data: activeCodes } = await supabase
-        .from('access_codes')
-        .select('*')
-        .eq('is_used', false)
-        .gt('expires_at', new Date().toISOString());
-
-      const { count: totalUsed } = await supabase
-        .from('access_codes')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_used', true);
-
-      const { count: totalCodes } = await supabase
-        .from('access_codes')
-        .select('*', { count: 'exact', head: true });
-
-      const maxConcurrent = 2;
-      const activeCount = activeCodes?.length || 0;
-      const canGenerate = activeCount < maxConcurrent;
-
-      return new Response(JSON.stringify({
-        success: true,
-        active_codes: activeCount,
-        max_concurrent: maxConcurrent,
-        can_generate: canGenerate,
-        total_used: totalUsed || 0,
-        total_codes: totalCodes || 0,
-        active_users: activeCodes?.map(c => ({
-          telegram_user_id: c.telegram_user_id,
-          code: c.code,
-          expires_at: c.expires_at,
-          created_at: c.created_at,
-        })) || [],
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      const botData = await callBot('status');
+      return json({ success: true, ...botData });
     }
 
-    // Action: check code validity (no side effects)
-    if (action === 'check') {
+    // ── VERIFY ──────────────────────────────────────────────────────────────
+    // 1. Frontend sends 6-digit code
+    // 2. We generate a device_id from IP + User-Agent (stable per device)
+    // 3. Bot checks MongoDB: is code valid? fewer than 2 devices? registers device
+    // 4. Bot returns ok/fail
+    if (action === 'verify') {
       const body = await getBody();
-      const { code } = body;
-      if (!code) throw new Error('code required');
+      const code = (body.code || '').trim();
 
-      const { data: codeData } = await supabase
-        .from('access_codes')
-        .select('*')
-        .eq('code', code)
-        .eq('is_used', false)
-        .gt('expires_at', new Date().toISOString())
-        .limit(1)
-        .single();
-
-      if (!codeData) {
-        return new Response(JSON.stringify({
-          success: false,
-          error: 'invalid_code',
-          message: 'Code is invalid, expired, or already used.',
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
+      if (!code || code.length !== 6) {
+        return json({ success: false, error: 'invalid_code' });
       }
 
-      return new Response(JSON.stringify({
-        success: true,
-        code: codeData.code,
-        telegram_user_id: codeData.telegram_user_id,
-        expires_at: codeData.expires_at,
-        created_at: codeData.created_at,
-        is_used: codeData.is_used,
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      // Build a stable device fingerprint from IP + User-Agent
+      const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+               || req.headers.get('cf-connecting-ip')
+               || 'unknown';
+      const ua = req.headers.get('user-agent') || 'unknown';
+
+      const enc    = new TextEncoder();
+      const buf    = await crypto.subtle.digest('SHA-256', enc.encode(`${ip}::${ua}`));
+      const device_id = Array.from(new Uint8Array(buf))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('')
+        .slice(0, 32);
+
+      let botData: any;
+      try {
+        botData = await callBot('verify', { code, device_id });
+      } catch (err) {
+        console.error('Bot API verify failed:', err);
+        return json({
+          success: false,
+          error:   'bot_unavailable',
+          message: 'Verification service is temporarily unavailable. Please try again.',
+        }, 502);
+      }
+
+      if (!botData.ok) {
+        if (String(botData.reason || '').toLowerCase().includes('maximum')) {
+          return json({
+            success:      false,
+            error:        'max_devices',
+            message:      `This code is already used on ${botData.devices_used || 2}/2 devices. Generate a new code from the bot.`,
+            devices_used: botData.devices_used,
+          });
+        }
+        return json({ success: false, error: 'invalid_code' });
+      }
+
+      return json({
+        success:      true,
+        telegram_user_id: botData.telegram_id,
+        devices_used: botData.devices_used,
+        devices_max:  botData.devices_max,
       });
     }
 
-    // Action: admin revoke a code
+    // ── CHECK ───────────────────────────────────────────────────────────────
+    // Read-only — checks if code is valid without registering a device
+    if (action === 'check') {
+      const body = await getBody();
+      const code = (body.code || '').trim();
+      if (!code) return json({ success: false, error: 'code_required' });
+
+      let botData: any;
+      try {
+        botData = await callBot('check', { code });
+      } catch {
+        return json({ success: false, error: 'bot_unavailable' }, 502);
+      }
+
+      return json({ success: botData.ok, ...botData });
+    }
+
+    // ── REVOKE (admin) ──────────────────────────────────────────────────────
+    // Proxied to bot — deletes code + its device records from MongoDB
     if (action === 'revoke') {
       const body = await getBody();
       const { code, telegram_user_id } = body;
 
       if (!code && !telegram_user_id) {
-        throw new Error('code or telegram_user_id required');
+        return json({ success: false, error: 'Provide either code or telegram_user_id' }, 400);
       }
 
-      let query = supabase.from('access_codes').delete();
-      if (code) {
-        query = query.eq('code', code);
-      } else {
-        query = query.eq('telegram_user_id', telegram_user_id).eq('is_used', false);
+      let botData: any;
+      try {
+        botData = await callBot('revoke', { code, telegram_id: telegram_user_id });
+      } catch {
+        return json({ success: false, error: 'bot_unavailable' }, 502);
       }
 
-      const { data, error: delError } = await query.select();
-
-      if (delError) throw new Error(delError.message);
-
-      return new Response(JSON.stringify({
-        success: true,
-        revoked_count: data?.length || 0,
-        message: data?.length ? 'Code(s) revoked successfully.' : 'No matching active codes found.',
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return json({ success: botData.ok, ...botData });
     }
 
-    // Action: get channels for frontend (public)
+    // ── CHANNELS ────────────────────────────────────────────────────────────
+    // The only action that still reads from Supabase — admin manages channels
+    // via the Owner Panel, bot reads them to show users which to join
     if (action === 'channels') {
-      const { data } = await supabase.from('telegram_channels').select('*').eq('is_active', true);
-      return new Response(JSON.stringify({ success: true, channels: data || [] }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      const { data } = await supabase
+        .from('telegram_channels')
+        .select('channel_name, channel_url')
+        .eq('is_active', true);
+
+      return json({ success: true, channels: data || [] });
     }
 
-    // Action: check membership & generate code
-    if (action === 'generate') {
-      const body = await getBody();
-      const telegramUserId = body.telegram_user_id;
-      if (!telegramUserId) throw new Error('telegram_user_id required');
+    return json({ success: false, error: `Unknown action: ${action}` }, 400);
 
-      // Enforce max 2 concurrent active codes
-      const { data: activeCodes } = await supabase
-        .from('access_codes')
-        .select('*')
-        .eq('is_used', false)
-        .gt('expires_at', new Date().toISOString());
-
-      const activeCount = activeCodes?.length || 0;
-      const alreadyHasCode = activeCodes?.find(c => c.telegram_user_id === telegramUserId);
-
-      // If user already has an active code, return it
-      if (alreadyHasCode) {
-        return new Response(JSON.stringify({
-          success: true,
-          code: alreadyHasCode.code,
-          expires_at: alreadyHasCode.expires_at,
-          existing: true,
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      if (activeCount >= 2) {
-        return new Response(JSON.stringify({
-          success: false,
-          error: 'max_users_reached',
-          message: 'Maximum 2 concurrent users allowed. Please try again later.',
-          active_count: activeCount,
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      // Get active channels
-      const { data: channels } = await supabase.from('telegram_channels').select('*').eq('is_active', true);
-      if (!channels || channels.length === 0) {
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        await supabase.from('access_codes').insert({
-          code,
-          telegram_user_id: telegramUserId,
-          expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-        });
-        return new Response(JSON.stringify({ success: true, code }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      // Check membership in all channels
-      const notJoined: string[] = [];
-      for (const ch of channels) {
-        try {
-          const res = await fetch(
-            `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${ch.channel_id}&user_id=${telegramUserId}`
-          );
-          const data = await res.json();
-          const status = data?.result?.status;
-          if (!status || ['left', 'kicked'].includes(status)) {
-            notJoined.push(ch.channel_name);
-          }
-        } catch {
-          notJoined.push(ch.channel_name);
-        }
-      }
-
-      if (notJoined.length > 0) {
-        return new Response(JSON.stringify({
-          success: false,
-          error: 'not_member',
-          not_joined: notJoined,
-          channels: channels.map(c => ({ name: c.channel_name, url: c.channel_url })),
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      await supabase.from('access_codes').insert({
-        code,
-        telegram_user_id: telegramUserId,
-        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      });
-
-      return new Response(JSON.stringify({ success: true, code, expires_in: '30 minutes' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Action: verify code + register device (frontend)
-    if (action === 'verify') {
-      const body = await getBody();
-      const { code } = body;
-      if (!code) throw new Error('code required');
-
-      const { data: codeData } = await supabase
-        .from('access_codes')
-        .select('*')
-        .eq('code', code)
-        .eq('is_used', false)
-        .gt('expires_at', new Date().toISOString())
-        .limit(1)
-        .single();
-
-      if (!codeData) {
-        return new Response(JSON.stringify({ success: false, error: 'invalid_code' }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(JSON.stringify({ success: true, telegram_user_id: codeData.telegram_user_id }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Action: mark code as used (after user signs up)
-    if (action === 'claim') {
-      const authHeader = req.headers.get('Authorization');
-      if (!authHeader) throw new Error('Auth required');
-
-      const { data: { user } } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
-      if (!user) throw new Error('Invalid token');
-
-      const body = await getBody();
-      const { code } = body;
-
-      await supabase.from('access_codes').update({ is_used: true, used_by: user.id }).eq('code', code);
-      await supabase.from('profiles').update({ telegram_verified: true }).eq('user_id', user.id);
-
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    throw new Error('Invalid action');
   } catch (error) {
-    return new Response(JSON.stringify({ success: false, error: error.message }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error('Edge function error:', error);
+    return json({ success: false, error: error.message }, 500);
   }
 });
