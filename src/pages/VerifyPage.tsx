@@ -4,7 +4,8 @@ import { ExternalLink, Shield, CheckCircle, AlertCircle, HelpCircle, Loader2 } f
 import logo from "@/assets/logo.png";
 
 // Edge function URL — proxies everything to your Render bot API
-const BOT_PROXY = `https://epgzewpcdqmqpnyvpfzu.supabase.co/functions/v1/telegram-verify`;
+const BOT_PROXY = import.meta.env.VITE_BOT_PROXY_URL || 
+  `https://epgzewpcdqmqpnyvpfzu.supabase.co/functions/v1/telegram-verify`;
 
 // Your Telegram bot link
 const BOT_LINK = "https://t.me/Beat_AniStream_hub_bot";
