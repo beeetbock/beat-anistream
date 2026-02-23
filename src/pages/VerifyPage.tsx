@@ -6,7 +6,6 @@ import logo from "@/assets/logo.png";
 // Edge function URL — proxies everything to your Render bot API
 const BOT_PROXY = `https://epgzewpcdqmqpnyvpfzu.supabase.co/functions/v1/telegram-verify`;
 
-
 // Your Telegram bot link
 const BOT_LINK = "https://t.me/Beat_AniStream_hub_bot";
 
