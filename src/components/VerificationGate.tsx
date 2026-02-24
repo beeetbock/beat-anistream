@@ -11,13 +11,13 @@ export default function VerificationGate({ children }: Props) {
   try {
     const stored = localStorage.getItem("beat-verified");
     if (!stored) return <Navigate to="/verify" replace />;
+
     const data = JSON.parse(stored);
     if (!data.verified) return <Navigate to="/verify" replace />;
 
-    // Check if verification has expired (2 days)
+    // After 2 days, force re-verification
     const verifiedAt = data.verifiedAt || 0;
-    const now = Date.now();
-    if (now - verifiedAt > TWO_DAYS_MS) {
+    if (Date.now() - verifiedAt > TWO_DAYS_MS) {
       localStorage.removeItem("beat-verified");
       return <Navigate to="/verify" replace />;
     }
