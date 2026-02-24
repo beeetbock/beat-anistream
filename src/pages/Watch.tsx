@@ -266,6 +266,11 @@ export default function WatchPage() {
                 onNext={goNext}
                 onTimeUpdate={handleTimeUpdate}
                 autoPlayNext={true}
+                qualities={qualities as any}
+                activeQuality={activeQuality}
+                activeServer={activeServer}
+                onQualityChange={switchQuality}
+                onServerChange={switchServer}
               />
             ) : (
               <div className="aspect-video flex items-center justify-center bg-card">
