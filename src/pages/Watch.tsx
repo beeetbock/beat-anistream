@@ -7,6 +7,7 @@ import Navbar from "@/components/Navbar";
 import VideoPlayer from "@/components/VideoPlayer";
 import Footer from "@/components/Footer";
 import AnimeCard from "@/components/AnimeCard";
+import LoginPrompt from "@/components/LoginPrompt";
 import { Download, ChevronRight, ExternalLink, Star, Tv, Clock, Bookmark, BookmarkCheck, Share2, ChevronDown, ChevronUp, Film, Play } from "lucide-react";
 import { toast } from "sonner";
 import { useSecurityHardening } from "@/hooks/useSecurityHardening";
@@ -63,6 +64,7 @@ export default function WatchPage() {
   const [currentDownloadUrl, setCurrentDownloadUrl] = useState<string | undefined>();
   const [inWatchlist, setInWatchlist] = useState(false);
   const [showFullDesc, setShowFullDesc] = useState(false);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
 
   const decodedName = name ? decodeURIComponent(name) : "";
   const epRaw = episode || "1";
@@ -162,6 +164,10 @@ export default function WatchPage() {
   };
 
   const toggleWatchlist = () => {
+    if (!user) {
+      setShowLoginPrompt(true);
+      return;
+    }
     if (!animeData) return;
     if (inWatchlist) {
       removeFromWatchlist(decodedName);
@@ -223,6 +229,21 @@ export default function WatchPage() {
   return (
     <div className="min-h-screen bg-background no-select">
       <Navbar />
+
+      {/* LoginPrompt modal */}
+      {showLoginPrompt && (
+        <LoginPrompt
+          onClose={() => setShowLoginPrompt(false)}
+          onSuccess={() => {
+            if (animeData) {
+              addToWatchlist({ animeName: decodedName, title, cover, genres, addedAt: Date.now() });
+              setInWatchlist(true);
+              toast.success("Added to watchlist!");
+            }
+          }}
+        />
+      )}
+
       <div className="pt-16 pb-10">
         <div className="max-w-screen-2xl mx-auto px-3 sm:px-6">
 
@@ -244,6 +265,7 @@ export default function WatchPage() {
                 onPrev={epNum > 1 ? goPrev : undefined}
                 onNext={goNext}
                 onTimeUpdate={handleTimeUpdate}
+                autoPlayNext={true}
               />
             ) : (
               <div className="aspect-video flex items-center justify-center bg-card">
@@ -284,7 +306,7 @@ export default function WatchPage() {
               <div>
                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider mb-2">Servers</p>
                 <div className="flex flex-wrap gap-2">
-                  {servers.map(s => (
+                  {servers.map((s, idx) => (
                     <button
                       key={s.name}
                       onClick={() => switchServer(s.name)}
@@ -294,8 +316,7 @@ export default function WatchPage() {
                           : "bg-secondary border-border hover:border-primary/50 text-foreground"
                       }`}
                     >
-                      {s.name === "Archive.org" ? "🏛️ Archive.org" : s.name === "PixelDrain" ? "💧 PixelDrain" : s.name === "StreamTape" ? "📺 StreamTape" : s.name}
-                      {s.name === "Archive.org" && <span className="ml-1 text-[10px] opacity-60">Primary</span>}
+                      Server {idx + 1}{idx === 0 && <span className="ml-1 text-[10px] opacity-60">Primary</span>}
                     </button>
                   ))}
                 </div>
@@ -337,10 +358,9 @@ export default function WatchPage() {
             )}
           </div>
 
-          {/* EPISODE SELECTION - Right below quality/server panel */}
+          {/* EPISODE SELECTION */}
           {seasons.length > 0 && (
             <div className="bg-card rounded-xl border border-border overflow-hidden mt-4">
-              {/* Season tabs */}
               {seasons.length > 1 && (
                 <div className="flex overflow-x-auto hide-scrollbar border-b border-border">
                   {seasons.map((s, i) => (
@@ -402,7 +422,6 @@ export default function WatchPage() {
 
           {/* Anime Info + Related */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
-            {/* Anime Info Panel */}
             {animeData && (
               <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="flex gap-4 p-4">
@@ -441,7 +460,6 @@ export default function WatchPage() {
               </div>
             )}
 
-            {/* Relations: Only show playable (anime type) */}
             {relatedAnime.length > 0 && (
               <div className="bg-card rounded-xl border border-border p-4 space-y-4">
                 <h3 className="font-display font-bold text-sm uppercase tracking-wider text-muted-foreground">Related</h3>
@@ -478,7 +496,6 @@ export default function WatchPage() {
             </div>
           )}
 
-          {/* Recommendations */}
           <RecommendationsSection currentAnimeName={decodedName} />
 
         </div>
