@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { Play, Info, Star, ChevronLeft, ChevronRight } from "lucide-react";
 import { AnimeItem, getAnimeName, getAnimeBanner, getAnimeGenres, getAnimeScore } from "@/lib/api";
@@ -10,6 +10,8 @@ interface Props {
 export default function HeroSection({ anime }: Props) {
   const featured = anime.filter(a => getAnimeBanner(a)).slice(0, 6);
   const [current, setCurrent] = useState(0);
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
 
   useEffect(() => {
     if (featured.length <= 1) return;
@@ -26,8 +28,30 @@ export default function HeroSection({ anime }: Props) {
   const genres = getAnimeGenres(item);
   const desc = (item.meta?.description || (item as any).description || "").replace(/<[^>]*>/g, "").slice(0, 220);
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || touchStartY.current === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    const dy = e.changedTouches[0].clientY - touchStartY.current;
+    // Only swipe if horizontal movement is dominant
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+      if (dx < 0) setCurrent(c => (c + 1) % featured.length);
+      else setCurrent(c => (c - 1 + featured.length) % featured.length);
+    }
+    touchStartX.current = null;
+    touchStartY.current = null;
+  };
+
   return (
-    <section className="relative h-[70vh] sm:h-[80vh] overflow-hidden">
+    <section
+      className="relative h-[70vh] sm:h-[80vh] overflow-hidden"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
       {banner && (
         <img
           src={banner}
