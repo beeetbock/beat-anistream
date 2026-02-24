@@ -2,13 +2,16 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { fetchAnimeInfo, AnimeDetail as AnimeDetailType, getAnimeName, getAnimeCover, getAnimeBanner, getAnimeGenres, getAnimeScore } from "@/lib/api";
 import { addToWatchlist, removeFromWatchlist, isInWatchlist, getLastWatched } from "@/lib/storage";
+import { useAuth } from "@/contexts/AuthContext";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import LoginPrompt from "@/components/LoginPrompt";
 import { Play, Star, Calendar, Clock, Tv, Bookmark, BookmarkCheck, Share2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function AnimeDetailPage() {
   const { name } = useParams();
+  const { user } = useAuth();
   const [data, setData] = useState<AnimeDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -16,6 +19,7 @@ export default function AnimeDetailPage() {
   const [showAllChars, setShowAllChars] = useState(false);
   const [inWatchlist, setInWatchlist] = useState(false);
   const [showFullDesc, setShowFullDesc] = useState(false);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
 
   const decodedName = name ? decodeURIComponent(name) : "";
 
@@ -31,6 +35,10 @@ export default function AnimeDetailPage() {
   }, [decodedName]);
 
   const toggleWatchlist = () => {
+    if (!user) {
+      setShowLoginPrompt(true);
+      return;
+    }
     if (!data) return;
     const title = getAnimeName(data);
     if (inWatchlist) {
@@ -107,6 +115,28 @@ export default function AnimeDetailPage() {
   return (
     <div className="min-h-screen">
       <Navbar />
+
+      {/* LoginPrompt modal */}
+      {showLoginPrompt && (
+        <LoginPrompt
+          onClose={() => setShowLoginPrompt(false)}
+          onSuccess={() => {
+            // After login, auto-add to watchlist
+            if (data) {
+              addToWatchlist({
+                animeName: data.anime_name,
+                title: getAnimeName(data),
+                cover: getAnimeCover(data),
+                genres: getAnimeGenres(data),
+                score: getAnimeScore(data),
+                addedAt: Date.now(),
+              });
+              setInWatchlist(true);
+              toast.success("Added to watchlist!");
+            }
+          }}
+        />
+      )}
 
       {/* Banner */}
       <div className="relative h-[50vh] sm:h-[60vh]">
